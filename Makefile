@@ -1,12 +1,16 @@
+.PHONY: clean test all
+
 client:
 	go build ./cmd/client
 
 server:
 	go build ./cmd/server
 
-all: client server
+all: test client server
 
-.PHONY: clean
+test:
+	go test ./internal/...
+
 clean:
 	rm -f client
 	rm -f server
