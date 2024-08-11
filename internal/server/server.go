@@ -2,9 +2,11 @@ package server
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"log"
 	"net"
+	"sync"
 )
 
 const (
@@ -12,38 +14,64 @@ const (
 	Host string = "localhost"
 )
 
+type Connection struct {
+	conn net.Conn
+}
+
+func (c *Connection) Write(data []byte) error {
+	_, err := c.conn.Write(append(data, []byte("\n")...))
+	return err
+}
+
+func (c *Connection) Close() {
+	c.conn.Close()
+}
+
 type Server struct {
-	stopCh   chan struct{}
-	handlers []func([]byte) error
-	Address  string
+	connections []*Connection
+	Address     string
+	listener    net.Listener
+	wg          sync.WaitGroup
 }
 
 // Handle run handlers for messages
 func (server *Server) Handle(conn net.Conn) {
-	server.handlers = append(server.handlers, func(data []byte) error {
-		_, err := conn.Write(append(data, []byte("\n")...))
-		return err
-	})
+	server.connections = append(
+		server.connections,
+		&Connection{conn: conn},
+	)
 	scanner := bufio.NewScanner(conn)
 	scanner.Split(bufio.ScanLines)
 
 	for scanner.Scan() {
 		data := scanner.Bytes()
-		println("data: ", string(data))
-		for idx, h := range server.handlers {
+		log.Println("data: ", string(data))
+		for idx, c := range server.connections {
+			server.wg.Add(1)
 			go func() {
-				err := h(data)
+				err := c.Write(data)
 				if err != nil {
-					server.handlers[idx] = server.handlers[len(server.handlers)-1]
-					server.handlers = server.handlers[:len(server.handlers)-1]
+					c.Close()
+					server.connections[idx] = server.connections[len(server.connections)-1]
+					server.connections = server.connections[:len(server.connections)-1]
 					log.Println("Handle data", err)
 				}
+				server.wg.Done()
 			}()
 		}
-		if err := scanner.Err(); err != nil {
-			fmt.Println("Scanner err", err)
-		}
 	}
+	server.wg.Done()
+}
+
+// Stop server`
+func (server *Server) Stop() {
+	server.listener.Close()
+	for _, c := range server.connections {
+		c.conn.Close()
+	}
+	server.connections = make([]*Connection, 0)
+	server.wg.Wait()
+	log.Println("Server stooped")
 }
 
 // Listen for messages
@@ -52,12 +80,18 @@ func (server *Server) Listen() {
 	if err != nil {
 		panic(err)
 	}
+	server.listener = listener
+	log.Println("Server started")
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
-			log.Println(err)
+			if errors.Is(err, net.ErrClosed) {
+				return
+			}
+			log.Println(err, net.ErrClosed)
 			continue
 		}
+		server.wg.Add(1)
 		go server.Handle(conn)
 	}
 }
@@ -65,7 +99,6 @@ func (server *Server) Listen() {
 // New create new `Server`
 func New() *Server {
 	server := &Server{
-		stopCh:  make(chan struct{}),
 		Address: fmt.Sprintf("%s:%d", Host, Port),
 	}
 	return server
