@@ -8,8 +8,8 @@ import (
 )
 
 const (
-	port int    = 8888
-	host string = "localhost"
+	Port int    = 8888
+	Host string = "localhost"
 )
 
 type Server struct {
@@ -66,7 +66,7 @@ func (server *Server) Listen() {
 func New() *Server {
 	server := &Server{
 		stopCh:  make(chan struct{}),
-		Address: fmt.Sprintf("%s:%d", host, port),
+		Address: fmt.Sprintf("%s:%d", Host, Port),
 	}
 	return server
 }
