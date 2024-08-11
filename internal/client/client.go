@@ -3,8 +3,10 @@ package client
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"net"
 	"os"
+	"sync"
 
 	"github.com/beetleman/go-chat/internal/encoding"
 	"github.com/beetleman/go-chat/internal/server"
@@ -13,21 +15,29 @@ import (
 type Client struct {
 	port     int
 	host     string
-	conn     *net.Conn
+	conn     net.Conn
 	UserName string
+	wg       sync.WaitGroup
+	r        io.ReadCloser
+	w        io.WriteCloser
 }
 
 func (client *Client) Handle() {
-	scanner := bufio.NewScanner(*client.conn)
+	scanner := bufio.NewScanner(client.conn)
 	scanner.Split(bufio.ScanLines)
 	for scanner.Scan() {
 		message := encoding.Decode(scanner.Bytes())
 		fmt.Println(message)
 	}
+	client.wg.Done()
 }
 
 func (client *Client) UserInput() {
-	scanner := bufio.NewScanner(os.Stdin)
+	client.r, client.w = io.Pipe()
+	go func() {
+		io.Copy(client.w, os.Stdin) // TODO: not stop, waiting for intput
+	}()
+	scanner := bufio.NewScanner(client.r)
 	scanner.Split(bufio.ScanLines)
 	for scanner.Scan() {
 		text := scanner.Text()
@@ -36,9 +46,16 @@ func (client *Client) UserInput() {
 			Text: text,
 			User: client.UserName,
 		}
-		conn := *client.conn
-		conn.Write(msg.Encode())
+		client.conn.Write(msg.Encode())
 	}
+	client.wg.Done()
+}
+
+func (client *Client) Stop() {
+	client.conn.Close()
+	client.r.Close()
+	client.w.Close()
+	client.wg.Wait()
 }
 
 func (client *Client) Connect() {
@@ -47,9 +64,12 @@ func (client *Client) Connect() {
 	if err != nil {
 		panic(err)
 	}
-	client.conn = &conn
+	client.wg = sync.WaitGroup{}
+	client.conn = conn
+	client.wg.Add(1)
 	go client.Handle()
-	client.UserInput()
+	client.wg.Add(1)
+	go client.UserInput()
 }
 
 func New(userName string) *Client {
